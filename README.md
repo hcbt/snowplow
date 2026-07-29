@@ -227,7 +227,7 @@ nix shell nixpkgs#skopeo -c skopeo copy --all \
 ```bash
 nix develop        # helm, kubectl, kubeconform, yq, treefmt
 nix flake check    # chart lint, render assertions, formatting, git hooks
-nix build .#runner-image
+nix build .#runner-image   # x86_64-linux / aarch64-linux only
 nix fmt
 ```
 

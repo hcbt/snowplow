@@ -1,12 +1,4 @@
 # `nix develop` / direnv.
-#
-# A plain mkShell, not devenv: devenv's flake module refuses to evaluate without
-# `devenv.root`, which under a pure flake can only point at the store copy of
-# this source — devenv then fails trying to create its state directory inside
-# /nix/store. The documented way around it (a `devenv-root` input overridden
-# per-invocation) makes every `nix develop` need `--impure`, which is a poor
-# trade for a repo with no processes, services or language integrations to
-# manage. Add devenv the day this shell needs one of those.
 { ... }:
 {
   perSystem =
