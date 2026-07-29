@@ -19,6 +19,7 @@
     "flake-parts": {
       "inputs": {
         "nixpkgs-lib": [
+          "nivis",
           "nixpkgs"
         ]
       },
@@ -40,6 +41,7 @@
       "inputs": {
         "flake-compat": "flake-compat",
         "nixpkgs": [
+          "nivis",
           "nixpkgs"
         ]
       },
@@ -54,6 +56,28 @@
       "original": {
         "owner": "cachix",
         "repo": "git-hooks.nix",
+        "type": "github"
+      }
+    },
+    "nivis": {
+      "inputs": {
+        "flake-parts": "flake-parts",
+        "git-hooks": "git-hooks",
+        "nixpkgs": "nixpkgs",
+        "treefmt-nix": "treefmt-nix"
+      },
+      "locked": {
+        "lastModified": 1785325344,
+        "narHash": "sha256-hTLxJyo8AoJla+LaM87nAmKGWlbKUuGPTDo4fdlVOs0=",
+        "owner": "hcbt",
+        "repo": "nivis",
+        "rev": "942a66e0254ce32d2e6fb8510d6848a4e47c0761",
+        "type": "github"
+      },
+      "original": {
+        "owner": "hcbt",
+        "ref": "v0.3.2",
+        "repo": "nivis",
         "type": "github"
       }
     },
@@ -75,15 +99,17 @@
     },
     "root": {
       "inputs": {
-        "flake-parts": "flake-parts",
-        "git-hooks": "git-hooks",
-        "nixpkgs": "nixpkgs",
-        "treefmt-nix": "treefmt-nix"
+        "nivis": "nivis",
+        "nixpkgs": [
+          "nivis",
+          "nixpkgs"
+        ]
       }
     },
     "treefmt-nix": {
       "inputs": {
         "nixpkgs": [
+          "nivis",
           "nixpkgs"
         ]
       },
