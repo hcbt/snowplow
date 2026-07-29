@@ -1,0 +1,217 @@
+{{- if not .Values.runners }}
+{{- fail "snowplow: .Values.runners is empty — a Deployment needs at least one runner registration" }}
+{{- end }}
+{{- if not .Values.image.repository }}
+{{- fail "snowplow: .Values.image.repository is unset — build an image with snowplow.lib.mkRunnerImage and point this at it" }}
+{{- end }}
+{{- $img := printf "%s:%s" .Values.image.repository .Values.image.tag }}
+# ONE Deployment hosting every runner registration.
+#
+# A registration is scoped to a single repository or organisation, but that is a
+# property of the *registration*, not of the machine: one pod can host as many
+# Runner.Listener processes as there are entries in .Values.runners, and they
+# can share everything underneath. So each entry gets a container, and they all
+# share one Nix store.
+#
+# There is no operator and no shell script anywhere: the container command is
+# the registration and the job loop, and k8s expands the PAT from env.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "snowplow.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snowplow.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  # Never run two pods holding the same runner names concurrently.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "snowplow.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "snowplow.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        # Seed the store from the image's own /nix. Mounted at /mnt/nix here so
+        # the image's store stays visible to copy from; every later container
+        # mounts the same volume at /nix.
+        #
+        # Runs as root: parts of the store are root-owned mode 600
+        # (/nix/var/nix/db/big-lock, reserved) and an unprivileged copy cannot
+        # even read them, so cp exits non-zero and the pod crashloops.
+        - name: seed-nix-store
+          image: {{ $img | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+          command: ["/bin/cp"]
+          args: ["-dRn", "/nix/.", "/mnt/nix/"]
+          volumeMounts:
+            - name: nix-store
+              mountPath: /mnt/nix
+        # Root copied them, so hand the store to the user the runners run as.
+        # This — not fsGroup — is what makes the store usable: fsGroup only
+        # touches the volume root, not the modes on the files cp created under
+        # it. See the podSecurityContext comment in values.yaml.
+        #
+        # `chmod g-s` on the root is belt and braces against that same failure:
+        # setgid only propagates from a directory's immediate parent, so a clean
+        # root keeps every build directory nix later creates clean too.
+        - name: chown-nix-store
+          image: {{ $img | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+          command: ["/bin/sh"]
+          args:
+            - "-c"
+            - {{ printf "chown -R %v:%v /mnt/nix && chmod g-s /mnt/nix" .Values.podSecurityContext.runAsUser .Values.podSecurityContext.runAsGroup | quote }}
+          volumeMounts:
+            - name: nix-store
+              mountPath: /mnt/nix
+      containers:
+        {{- range .Values.runners }}
+        {{- $root := printf "%s/%s" $.Values.runnerRoot .name }}
+        {{- $ephemeral := $.Values.ephemeral }}
+        {{- if not (kindIs "invalid" .ephemeral) }}{{- $ephemeral = .ephemeral }}{{- end }}
+        {{- $labels := .labels }}
+        {{- if kindIs "slice" $labels }}{{- $labels = join "," $labels }}{{- end }}
+        {{- $flags := list "--unattended" "--disableupdate" "--replace" }}
+        {{- if $ephemeral }}{{- $flags = append $flags "--ephemeral" }}{{- end }}
+        {{- $flags = append $flags (printf "--url %s" (.url | quote)) }}
+        {{- $flags = append $flags (printf "--name %s" (.name | quote)) }}
+        {{- if $labels }}{{- $flags = append $flags (printf "--labels %s" ($labels | quote)) }}{{- end }}
+        {{- with .group }}{{- $flags = append $flags (printf "--runnergroup %s" (. | quote)) }}{{- end }}
+        - name: runner-{{ .name }}
+          image: {{ $img | quote }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          # Register and run in the container's own startup, NOT an
+          # initContainer: with --ephemeral the listener exits after exactly one
+          # job, the kubelet restarts this container, and initContainers do not
+          # re-run on a container restart — only on a pod restart. Registering
+          # here is what makes every job get a fresh runner instead of the pod
+          # dying after its first job.
+          #
+          # Re-registration works because the credential is a PAT, from which a
+          # fresh registration token is minted each time. A pre-generated
+          # registration token would not survive this, being single-use.
+          command: ["/bin/sh"]
+          args:
+            - "-c"
+            - |
+              set -eu
+
+              # Clean slate per job: the whole runner root goes, so _work (the
+              # checkout, build outputs, anything a previous job left behind)
+              # and .credentials from the last registration cannot leak into
+              # this one. The Nix store is deliberately NOT wiped — it is a
+              # content-addressed cache, the same role GitHub's own hosted
+              # runners give their toolcache, and clearing it would re-fetch
+              # every dependency on every job.
+              rm -rf "$RUNNER_ROOT"
+              mkdir -p "$RUNNER_ROOT"
+
+              /bin/Runner.Listener configure {{ join " " $flags }} --pat "$GITHUB_PAT"
+
+              exec /bin/Runner.Listener run --startuptype service
+          resources:
+            {{- toYaml (default $.Values.resources .resources) | nindent 12 }}
+          env:
+            - name: GITHUB_PAT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (include "snowplow.secretName" $) (dig "secretName" "" (default dict .auth)) | quote }}
+                  key: {{ default $.Values.auth.secretKey (dig "secretKey" "" (default dict .auth)) | quote }}
+            # Runner state and HOME share one directory so the worker finds its
+            # credentials without the symlink dance the NixOS module does.
+            - name: RUNNER_ROOT
+              value: {{ $root | quote }}
+            - name: HOME
+              value: {{ $root | quote }}
+            {{- with $.Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- with .extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - name: runners
+              mountPath: {{ $.Values.runnerRoot }}
+            - name: tmp
+              mountPath: /tmp
+            - name: vartmp
+              mountPath: /var/tmp
+            - name: nix-store
+              mountPath: /nix
+            {{- if $.Values.nss.enabled }}
+            - name: nss
+              mountPath: /etc/passwd
+              subPath: passwd
+            - name: nss
+              mountPath: /etc/group
+              subPath: group
+            {{- end }}
+        {{- end }}
+      volumes:
+        # Runner state (.runner, .credentials) and _work, one subdirectory per
+        # registration. Disposable, and disposed of aggressively when ephemeral:
+        # each container deletes its own subdirectory and re-registers before
+        # every job, so nothing survives from one job to the next.
+        - name: runners
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        # skopeo writes large image temporaries to /var/tmp specifically, which
+        # does not exist in a from-scratch Nix image.
+        - name: vartmp
+          emptyDir: {}
+        - name: nix-store
+          {{- if .Values.nixStore.existingClaim }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.nixStore.existingClaim }}
+          {{- else }}
+          emptyDir:
+            sizeLimit: {{ .Values.nixStore.sizeLimit }}
+          {{- end }}
+        {{- if .Values.nss.enabled }}
+        - name: nss
+          configMap:
+            name: {{ include "snowplow.fullname" . }}-nss
+        {{- end }}
