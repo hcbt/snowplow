@@ -1,0 +1,159 @@
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  # Build your own with `snowplow.lib.mkRunnerImage` and push it somewhere your
+  # cluster can pull from — there is no published default image, because the
+  # useful part of a Nix runner is the toolchain YOU put in it.
+  repository: ""
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# Names of pull secrets that already exist in the release namespace.
+imagePullSecrets: []
+
+# One entry per GitHub registration, all hosted by a SINGLE pod.
+#
+# A registration is scoped to one repository or organisation, but that binds the
+# registration, not the machine: one pod runs one Runner.Listener per entry and
+# they share a Nix store. Adding a repo is one entry here, not another
+# Deployment and another volume.
+#
+#   name    the runner name GitHub shows (--replace lets a restarted pod
+#           reclaim it)
+#   url     https://github.com/OWNER/REPO for a repo runner,
+#           https://github.com/ORG for an organisation runner
+#   labels  what workflows target with `runs-on`; a string or a list. The
+#           default labels self-hosted, Linux and X64 are added on top.
+#   group   optional runner group (organisation runners only)
+#   ephemeral, resources, extraEnv, auth  optional per-runner overrides of the
+#           corresponding top-level value
+#
+# Every entry uses the same credential unless it overrides `auth`, so the token
+# must be scoped to every repository or organisation listed here. Adding an
+# entry without extending the token leaves that one container crashlooping
+# (403 from /actions/runners/registration-token) while the others keep working.
+runners: []
+# - name: my-repo
+#   url: https://github.com/OWNER/REPO
+#   labels: nix-x64
+
+# Ephemeral runners deregister after a single job and the listener exits; the
+# kubelet then restarts the container, which re-registers before the next job.
+# That is what gives every job a clean workspace. Registration happens in the
+# container's own startup rather than an initContainer precisely because
+# initContainers do not re-run on a container restart, only on a pod restart.
+#
+# Set false for persistent runners (one long-lived registration serving many
+# jobs, workspace reused between them).
+ephemeral: true
+
+# Parent of the per-runner state directories (.runner, .credentials, _work).
+runnerRoot: /runners
+
+# The credential. Any operator or manual `kubectl create secret` can produce it;
+# the chart only reads it.
+#
+# It must be a PAT, not a pre-generated registration token: the runner mints a
+# fresh registration token from the PAT on every (re-)registration, and a
+# registration token is single-use, so an ephemeral runner would fail to come
+# back. Fine-grained PAT permission: `Administration: read and write` on every
+# repository the runners serve (or `self-hosted runners` on the organisation).
+auth:
+  secretName: ""
+  secretKey: pat
+
+  # Optional convenience for clusters running the 1Password Kubernetes
+  # operator: render an OnePasswordItem that syncs a vault item into the Secret
+  # named above. Every field of the item becomes a key of the Secret, so the
+  # item needs a field matching `secretKey`.
+  onePassword:
+    enabled: false
+    itemPath: "" # vaults/VAULT/items/ITEM
+
+# The Nix store is a CACHE, not state: every path in it is either seeded from
+# the image or re-derivable from a flake. An emptyDir keeps it warm for the life
+# of the pod and reclaims it on restart, which per-runner PVCs fail to do — they
+# only ever grow. `sizeLimit` is an upper bound, not a reservation: nothing is
+# provisioned up front and the space returns to the node when the pod restarts.
+#
+# Set `existingClaim` to keep the store across pod restarts instead; expect it
+# to need periodic `nix store gc`.
+nixStore:
+  sizeLimit: 15Gi
+  existingClaim: ""
+
+# /etc/passwd and /etc/group for the runner containers.
+#
+# Nix resolves the current user through getpwuid, not $HOME, so with no entry
+# for the uid the pod runs as, every nix command fails with "error: cannot
+# determine user's home directory" — setting HOME explicitly does not help.
+#
+# Images built by `lib.mkRunnerImage` already carry the entry, but that fix
+# cannot deploy itself: building a new image requires a runner, and the runner
+# needs this to run nix at all. Mounting it here breaks that cycle and keeps the
+# cluster recoverable from the same class of failure in future.
+nss:
+  enabled: true
+  passwd: |
+    root:x:0:0:root user:/var/empty:/bin/sh
+    runner:x:1000:1000:runner:/runner:/bin/bash
+    nobody:x:65534:65534:nobody:/var/empty:/bin/sh
+  group: |
+    root:x:0:
+    runner:x:1000:
+    nobody:x:65534:
+
+# Jobs run unprivileged: some tooling (postgres' initdb, for one) refuses to run
+# as root. Must match the uid/gid the image declares in /etc/passwd.
+#
+# Deliberately NO fsGroup. Setting one makes kubelet mark the volume root
+# setgid, and a setgid directory is inherited by every directory created beneath
+# it — including nix's build directory and everything a source archive unpacks
+# into. unpackPhase then runs `chmod -R u+w`, which re-applies a mode still
+# carrying S_ISGID, and nix's own seccomp filter (`filter-syscalls`, on by
+# default, there to keep setuid/setgid binaries out of the store) denies exactly
+# that call:
+#
+#   chmod: changing permissions of '…': Operation not permitted
+#
+# Every derivation with an unpack phase fails that way, which does not look like
+# a permissions problem in the log. The chown initContainer is what actually
+# establishes ownership; fsGroup was never doing that job. Do not add it back.
+podSecurityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+
+resources:
+  requests:
+    memory: 512Mi
+    cpu: 250m
+  limits:
+    memory: 4Gi
+    cpu: "2"
+
+# Extra environment for every runner container, as a list of k8s EnvVar.
+extraEnv: []
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+priorityClassName: ""
+terminationGracePeriodSeconds: 30
+
+# The chart creates its own namespace only when asked; GitOps controllers
+# usually do this themselves (ArgoCD's CreateNamespace=true).
+namespace:
+  create: false
+
+# argocd-image-updater needs to read this namespace's pull secret to query the
+# registry for new tags. Without the Role it logs `secrets "…" is forbidden` and
+# silently never updates the image.
+imageUpdater:
+  rbac:
+    enabled: false
+    pullSecretName: ghcr-credentials
+    serviceAccountName: argocd-image-updater
+    serviceAccountNamespace: argocd

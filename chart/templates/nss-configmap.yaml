@@ -1,0 +1,16 @@
+{{- if .Values.nss.enabled }}
+# /etc/passwd and /etc/group for the runner containers. See the `nss` comment in
+# values.yaml for why this exists even though the image already ships them.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "snowplow.fullname" . }}-nss
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "snowplow.labels" . | nindent 4 }}
+data:
+  passwd: |
+    {{- .Values.nss.passwd | nindent 4 }}
+  group: |
+    {{- .Values.nss.group | nindent 4 }}
+{{- end }}

@@ -1,0 +1,36 @@
+# The values the chart's tests render against, and a reasonable starting point.
+image:
+  repository: ghcr.io/OWNER/my-runner
+  tag: latest
+
+imagePullSecrets:
+  - ghcr-credentials
+
+runners:
+  # A repository runner.
+  - name: my-repo
+    url: https://github.com/OWNER/REPO
+    labels: nix-x64
+  # An organisation runner, persistent (one registration serving many jobs) and
+  # with more memory than the default.
+  - name: my-org
+    url: https://github.com/ORG
+    labels:
+      - nix-x64
+      - big
+    group: nix
+    ephemeral: false
+    resources:
+      requests:
+        memory: 1Gi
+        cpu: 500m
+      limits:
+        memory: 8Gi
+        cpu: "4"
+
+auth:
+  secretName: runner-pat
+  secretKey: pat
+
+nixStore:
+  sizeLimit: 20Gi

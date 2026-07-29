@@ -1,0 +1,15 @@
+apiVersion: v2
+name: snowplow
+description: Self-hosted GitHub Actions runners, one container per registration, Nix-built, no operator
+type: application
+version: 0.1.0
+# The Runner.Listener version is whatever the image was built with, so there is
+# no single appVersion to pin here.
+appVersion: "0.1.0"
+keywords:
+  - github-actions
+  - self-hosted-runner
+  - nix
+  - ci
+sources:
+  - https://github.com/hcbt/snowplow
