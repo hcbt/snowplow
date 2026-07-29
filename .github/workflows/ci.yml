@@ -30,5 +30,27 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       # `nix flake check` only evaluates the image; this is what proves it
-      # actually builds.
+      # actually builds. Kept separate from the smoke job below because that
+      # one cannot run for pull requests from forks, where GITHUB_TOKEN has no
+      # write access to packages.
       - run: nix build .#runner-image -L
+
+  # Exercises build-push-image.yml — the workflow consumers call — end to end:
+  # input plumbing, the skopeo-or-nixpkgs fallback, and the push loop. Nothing
+  # else runs it, so a break there would only ever surface in someone else's
+  # repository.
+  #
+  # The package it pushes is a CI artifact, not a release: snowplow publishes no
+  # runner image, because the useful part is the toolchain you put in it.
+  smoke-reusable-workflow:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/build-push-image.yml
+    with:
+      package: runner-image
+      image: ghcr.io/${{ github.repository_owner }}/snowplow-ci-smoke
+      tags: ${{ github.sha }}
+    secrets:
+      registry-password: ${{ secrets.GITHUB_TOKEN }}
