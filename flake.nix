@@ -2,37 +2,34 @@
   description = "Nix-built self-hosted GitHub Actions runners for Kubernetes — an OCI image builder and a Helm chart, no operator";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    # The shared scaffolding: treefmt, the git hooks, mkDevShell, the app
+    # helpers, and the generated GitHub-side files. Replaces the treefmt-nix
+    # and git-hooks inputs this flake used to declare itself.
+    nivis.url = "github:hcbt/nivis/v0.3.2";
 
-    flake-parts.url = "github:hercules-ci/flake-parts";
-    flake-parts.inputs.nixpkgs-lib.follows = "nixpkgs";
-
-    # One formatter for every language in the repo, exposed as `nix fmt`, a
-    # `treefmt` check, and the formatting half of the git hooks.
-    treefmt-nix.url = "github:numtide/treefmt-nix";
-    treefmt-nix.inputs.nixpkgs.follows = "nixpkgs";
-
-    git-hooks.url = "github:cachix/git-hooks.nix";
-    git-hooks.inputs.nixpkgs.follows = "nixpkgs";
+    # flake-parts builds `pkgs` from the CONSUMING flake's own nixpkgs input,
+    # so this cannot be dropped.
+    nixpkgs.follows = "nivis/nixpkgs";
   };
 
   outputs =
-    inputs@{ flake-parts, ... }:
-    flake-parts.lib.mkFlake { inherit inputs; } {
-      systems = [
-        "x86_64-linux"
-        "aarch64-linux"
-        # No x86_64-darwin: nixpkgs 26.11 dropped it.
-        "aarch64-darwin"
-      ];
+    inputs@{ nivis, ... }:
+    nivis.inputs.flake-parts.lib.mkFlake { inherit inputs; } {
+      systems = nivis.lib.defaultSystems;
 
       imports = [
+        (nivis.flakeModules.default {
+          srcRoot = ./.;
+          repo = {
+            initialVersion = "0.1.0";
+          };
+        })
+
         ./nix/lib.nix # flake.lib.mkRunnerImage / renderChart, flakeModules.default
         ./nix/packages.nix # the reference image + the packaged chart
         ./nix/checks.nix # chart lint + render assertions, image evaluation
         ./nix/shells.nix # `nix develop`
-        ./nix/treefmt.nix # `nix fmt` + checks.treefmt
-        ./nix/git-hooks.nix # pre-commit, delegating formatting to treefmt
+        ./nix/format.nix # the repo-specific half of treefmt and the hooks
       ];
     };
 }

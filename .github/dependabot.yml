@@ -1,18 +1,9 @@
-# Action versions only.
-#
-# Nothing here updates flake inputs: `flake.lock` is moved deliberately, with a
-# `nix flake check` behind it, not by a bot. Dependabot has no Nix ecosystem
-# anyway.
-#
-# Note this does NOT cover the `uses:` refs written in documentation — the
-# README's and build-push-image.yml's own `hcbt/snowplow/...@master` examples
-# are prose to Dependabot.
 version: 2
+
 updates:
-  - package-ecosystem: github-actions
-    directory: /
-    schedule:
-      interval: weekly
-    commit-message:
-      prefix: chore
-      include: scope
+- package-ecosystem: "github-actions"
+  directory: "/"
+  schedule:
+    interval: "weekly"
+  commit-message:
+    prefix: "chore"

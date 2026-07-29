@@ -31,7 +31,7 @@
             };
           };
         in
-        inputs.flake-parts.lib.mkFlake { inputs = allInputs; } module;
+        inputs.nivis.inputs.flake-parts.lib.mkFlake { inputs = allInputs; } module;
 
       # Renders the chart, then runs the given assertions with $manifests bound
       # to the rendered file.
@@ -292,7 +292,8 @@
           let
             example = import ../examples/flake.nix;
             exampleInputs = {
-              inherit (inputs) nixpkgs flake-parts;
+              inherit (inputs) nixpkgs;
+              inherit (inputs.nivis.inputs) flake-parts;
               inherit snowplow;
             };
             evaluated = example.outputs (
