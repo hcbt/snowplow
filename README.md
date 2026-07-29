@@ -67,7 +67,7 @@ jobs:
     permissions:
       contents: read
       packages: write
-    uses: hcbt/snowplow/.github/workflows/build-push-image.yml@main
+    uses: hcbt/snowplow/.github/workflows/build-push-image.yml@master
     with:
       package: ci-runner
       image: ghcr.io/${{ github.repository_owner }}/ci-runner
@@ -129,13 +129,13 @@ spec:
   project: default
   sources:
     - repoURL: https://github.com/hcbt/snowplow.git
-      targetRevision: main
+      targetRevision: master
       path: chart
       helm:
         valueFiles:
           - $values/path/to/my-values.yaml
     - repoURL: https://github.com/OWNER/INFRA.git
-      targetRevision: main
+      targetRevision: master
       ref: values
   destination:
     server: https://kubernetes.default.svc
