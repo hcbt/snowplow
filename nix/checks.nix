@@ -307,13 +307,13 @@
           '';
         };
 
-        # The container command is the fix for the runner supervision issue-class stalls, and it can
-        # only be tested by RUNNING it. Asserting on the rendered string would
-        # pass just as happily for the `exec Runner.Listener` version this
-        # replaced — and that version is the bug: an ephemeral listener exits 0
-        # after one job, `restartPolicy: Always` cannot tell that from a crash,
-        # and the kubelet's backoff grows toward five minutes with every job.
-        # What follows are properties of the script's control flow.
+        # The container command can only be tested by RUNNING it. Asserting on
+        # the rendered string would pass just as happily for the
+        # `exec Runner.Listener` version this replaced — and that version is the
+        # bug: an ephemeral listener exits 0 after one job, `restartPolicy:
+        # Always` cannot tell that from a crash, and the kubelet's backoff grows
+        # toward five minutes with every job. What follows are properties of the
+        # script's control flow.
         chart-runner-supervision =
           pkgs.runCommand "chart-runner-supervision"
             {
