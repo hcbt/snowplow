@@ -50,7 +50,16 @@ check` reports "The following flake outputs are unchecked", so the
 - **Assertions run against rendered YAML with `yq`, never `grep`.** The
   templates carry long comments that survive into the output, so a grep for
   `--ephemeral` matches a comment about ephemeral runners whether or not the
-  flag is there.
+  flag is there. The two assertions that must read the container command as
+  text strip comment lines first (`command()` in `chart-render-defaults`).
+- **The container command supervises the listener in a loop, and must never go
+  back to `exec Runner.Listener run`.** An ephemeral listener exits 0 after one
+  job; `restartPolicy: Always` counts that as a crash, and the kubelet's
+  exponential backoff then _becomes_ the job queue — CrashLoopBackOff, and jobs
+  waiting up to five minutes for a runner to exist. The loop reads like
+  needless machinery precisely because what it prevents is invisible.
+  `checks.chart-runner-supervision` executes the rendered script against a fake
+  `Runner.Listener` to catch a regression; no assertion on the manifest can.
 - **Helm templates are not YAML.** Both prettier and the `check-yaml` hook
   exclude `chart/templates/` — Go template directives do not parse.
 - Releases come from release-please. Do not tag by hand.

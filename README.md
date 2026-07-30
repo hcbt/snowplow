@@ -22,15 +22,16 @@ in `runners`, and they share everything underneath — most importantly `/nix`,
 which is a cache, not state. Adding a repo is one entry in values, not another
 Deployment and another volume.
 
-Registration happens in each container's own startup rather than an
-initContainer. With `--ephemeral` the listener exits after exactly one job and
-the kubelet restarts the container — and initContainers do not re-run on a
-container restart, only on a pod restart. Registering in the container is what
-makes every job get a fresh runner instead of the pod dying after its first job.
+With `--ephemeral` a listener serves exactly one job and then exits, so
+registration has to happen once per job. Each container therefore registers and
+runs the listener **in a loop of its own** — not in an initContainer, which runs
+once per pod, and pointedly not by exiting and letting the kubelet restart it.
+That last distinction is the one that matters; see
+[Things that will bite you](#things-that-will-bite-you).
 
-That works because the stored credential is a **PAT**, from which a fresh
-registration token is minted every time. A pre-generated registration token is
-single-use and would not survive the second job.
+Re-registering works because the stored credential is a **PAT**, from which a
+fresh registration token is minted every time. A pre-generated registration
+token is single-use and would not survive the second job.
 
 ## Quick start
 
@@ -210,7 +211,25 @@ and `XDG_RUNTIME_DIR` at the runner's home.
 
 **A runner container crashlooping with a 403 from
 `/actions/runners/registration-token`** — the PAT does not cover that entry's
-repository. Every entry shares one credential unless it overrides `auth`.
+repository. Every entry shares one credential unless it overrides `auth`. The
+container retries `restart.maxFailures` times with a growing delay before it
+gives up and exits, so this takes about a minute to show up as
+`CrashLoopBackOff` rather than appearing instantly.
+
+**`CrashLoopBackOff` with a container whose log ends `Job … completed with
+result: Succeeded`, and CI that gets slower the more it is used** — the runner
+is fine; the container is exiting after each job and letting the kubelet restart
+it. `restartPolicy: Always` cannot tell a completed ephemeral job from a crash,
+so it applies exponential backoff, the delay climbs toward the 5-minute cap, and
+every new job waits out a timer before any runner exists to claim it. Under load
+that reads as CI being wedged.
+
+This is why the container command is a supervision loop and not
+`exec Runner.Listener run`. Do not "simplify" it back: a Deployment cannot
+express "exiting is success", and the alternatives that can — a `Job` per
+workflow run, or `actions-runner-controller` — both give up the shared warm Nix
+store that is the reason to run this chart at all. Genuine failures still
+crashloop, deliberately, via `restart.maxFailures` above.
 
 **Building the runner image on the runner it produces** is circular but
 recoverable: build and push from any machine with Nix.
@@ -233,7 +252,13 @@ nix fmt
 
 The chart's tests render it with `helm template` and assert on the result with
 `yq` — never `grep`, because the templates carry comments that survive into the
-output and would match. See [`nix/checks.nix`](nix/checks.nix).
+output and would match. Where an assertion does have to look at the container
+command as text, it strips comment lines first.
+
+`checks.chart-runner-supervision` goes further and **executes** the rendered
+container command against a fake `Runner.Listener`, because whether a finished
+job costs a kubelet restart is a property of that script's control flow and no
+assertion on the manifest can see it. See [`nix/checks.nix`](nix/checks.nix).
 
 ## License
 
