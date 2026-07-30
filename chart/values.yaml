@@ -177,7 +177,29 @@ nodeSelector: {}
 tolerations: []
 affinity: {}
 priorityClassName: ""
-terminationGracePeriodSeconds: 30
+
+# How long the kubelet waits between SIGTERM and SIGKILL. Deliberately an hour,
+# and NOT a delay anyone pays: this is a ceiling, not a sleep. The pod goes the
+# instant the last listener finishes its job and the supervisor loop breaks, so
+# an idle runner still terminates in about a second. The only thing this number
+# buys is the right to be slow when a job is actually in flight.
+#
+# That matters because these pods hold live CI jobs and the Deployment rolls
+# with `strategy: Recreate` — every image push tears the running pod down before
+# the new one starts. The container command traps SIGTERM and forwards it to
+# Runner.Listener precisely so an in-flight job drains rather than vanishes, but
+# a drain only completes if it is given longer than a job takes. Real jobs on
+# these runners run 10-15 minutes; the fleet's own workflows cap at 45.
+#
+# At the old default of 30s that drain could never finish, and the failure was
+# not a slow rollout but a corrupt one: containers died `exit 137` mid-job, the
+# job failed with "The self-hosted runner lost communication with the server",
+# and runners came back attached to sessions GitHub still considered live —
+# logging "Listening for Jobs" while no runner was registered, so their queues
+# never drained until the pod was recreated by hand. An abandoned job is worse
+# than a delayed rollout. Do not tune this back down to look tidy; if a rollout
+# feels stuck, the pod is draining a job, which is the intended behaviour.
+terminationGracePeriodSeconds: 3600
 
 # The chart creates its own namespace only when asked; GitOps controllers
 # usually do this themselves (ArgoCD's CreateNamespace=true).
