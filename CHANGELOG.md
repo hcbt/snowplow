@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.3](https://github.com/hcbt/snowplow/compare/v0.2.2...v0.2.3) (2026-07-30)
+
+
+### Fixed
+
+* **chart:** give a draining runner longer than a job to finish ([#17](https://github.com/hcbt/snowplow/issues/17)) ([26f7a23](https://github.com/hcbt/snowplow/commit/26f7a23e5e101df50c70946b1626afe5c15a00fb))
+
+
+### Changed
+
+* build the runner image through coldstart ([#13](https://github.com/hcbt/snowplow/issues/13)) ([0e51911](https://github.com/hcbt/snowplow/commit/0e5191185d92dd4b5787a807f413569718c6224f))
+
 ## [0.2.2](https://github.com/hcbt/snowplow/compare/v0.2.1...v0.2.2) (2026-07-30)
 
 
