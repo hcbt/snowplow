@@ -4,7 +4,11 @@
 {{- if not .Values.image.repository }}
 {{- fail "snowplow: .Values.image.repository is unset — build an image with snowplow.lib.mkRunnerImage and point this at it" }}
 {{- end }}
+{{- if not .Values.runnerBinary }}
+{{- fail "snowplow: .Values.runnerBinary is empty — it names Runner.Listener inside the image, and the container command is nothing without it" }}
+{{- end }}
 {{- $img := printf "%s:%s" .Values.image.repository .Values.image.tag }}
+{{- $binary := .Values.runnerBinary }}
 # ONE Deployment hosting every runner registration.
 #
 # A registration is scoped to a single repository or organisation, but that is a
@@ -123,11 +127,10 @@ spec:
           image: {{ $img | quote }}
           imagePullPolicy: {{ $.Values.image.pullPolicy }}
           # Register and run in the container's own startup, NOT an
-          # initContainer: with --ephemeral the listener exits after exactly one
-          # job, the kubelet restarts this container, and initContainers do not
-          # re-run on a container restart — only on a pod restart. Registering
-          # here is what makes every job get a fresh runner instead of the pod
-          # dying after its first job.
+          # initContainer: with --ephemeral a listener serves exactly one job,
+          # so registration has to happen once per job, and initContainers run
+          # once per POD. Registering here is what makes every job get a fresh
+          # runner instead of the pod being useful exactly once.
           #
           # Re-registration works because the credential is a PAT, from which a
           # fresh registration token is minted each time. A pre-generated
@@ -136,21 +139,97 @@ spec:
           args:
             - "-c"
             - |
-              set -eu
+              # This loop is the supervisor, and it exists because the kubelet
+              # cannot be one. An ephemeral listener exits 0 after its job;
+              # under `restartPolicy: Always` that clean exit is indistinguish-
+              # able from a crash, so every job costs a restart and the kubelet
+              # backs off exponentially toward its five-minute cap. The pod ends
+              # up in CrashLoopBackOff and each new job queues behind a timer.
+              # Iterating here instead means the happy path never exits the
+              # container, so there is nothing to back off from — while every
+              # iteration still re-registers and wipes the workspace, which is
+              # the whole point of --ephemeral.
+              #
+              # `set -e` is deliberately absent: the failure paths below are
+              # handled, not fatal.
+              set -u
 
-              # Clean slate per job: the whole runner root goes, so _work (the
-              # checkout, build outputs, anything a previous job left behind)
-              # and .credentials from the last registration cannot leak into
-              # this one. The Nix store is deliberately NOT wiped — it is a
-              # content-addressed cache, the same role GitHub's own hosted
-              # runners give their toolcache, and clearing it would re-fetch
-              # every dependency on every job.
-              rm -rf "$RUNNER_ROOT"
-              mkdir -p "$RUNNER_ROOT"
+              max_failures={{ $.Values.restart.maxFailures }}
+              retry_delay={{ $.Values.restart.retryDelaySeconds }}
 
-              /bin/Runner.Listener configure {{ join " " $flags }} --pat "$GITHUB_PAT"
+              stopping=""
+              listener=""
 
-              exec /bin/Runner.Listener run --startuptype service
+              # Forward SIGTERM. The listener used to be exec'd, so it was PID 1
+              # and the kubelet's TERM reached it directly; now it is a child of
+              # this shell, and a shell does not forward signals on its own.
+              # Without this a pod delete during a job would sit out
+              # terminationGracePeriodSeconds and then be SIGKILLed, abandoning
+              # the job rather than cancelling it.
+              on_term() {
+                stopping=1
+                if [ -n "$listener" ]; then
+                  kill -TERM "$listener" 2>/dev/null || true
+                fi
+              }
+              trap on_term TERM INT
+
+              failures=0
+              while [ -z "$stopping" ]; do
+                # Clean slate per job: the whole runner root goes, so _work (the
+                # checkout, build outputs, anything a previous job left behind)
+                # and .credentials from the last registration cannot leak into
+                # this one. The Nix store is deliberately NOT wiped — it is a
+                # content-addressed cache, the same role GitHub's own hosted
+                # runners give their toolcache, and clearing it would re-fetch
+                # every dependency on every job.
+                rm -rf "$RUNNER_ROOT"
+                mkdir -p "$RUNNER_ROOT"
+
+                status=0
+                if {{ $binary | quote }} configure {{ join " " $flags }} --pat "$GITHUB_PAT"; then
+                  # Backgrounded rather than exec'd, so the trap above can run.
+                  {{ $binary | quote }} run --startuptype service &
+                  listener=$!
+                  wait "$listener" || status=$?
+                  # `wait` returns the moment a trapped signal arrives, before
+                  # the child has actually gone. Wait again so the container
+                  # does not exit out from under a job still shutting down.
+                  if [ -n "$stopping" ]; then
+                    wait "$listener" 2>/dev/null || true
+                  fi
+                  listener=""
+                  if [ "$status" -ne 0 ]; then
+                    echo "snowplow: listener exited $status" >&2
+                  fi
+                else
+                  status=$?
+                  echo "snowplow: registration failed (exit $status)" >&2
+                fi
+
+                if [ -n "$stopping" ]; then
+                  break
+                fi
+
+                if [ "$status" -eq 0 ]; then
+                  # A completed job clears the slate, so an occasional failure
+                  # never accumulates toward the limit.
+                  failures=0
+                else
+                  failures=$((failures + 1))
+                  if [ "$failures" -ge "$max_failures" ]; then
+                    # The one case where crashing is right: a runner that cannot
+                    # register at all (403 from a PAT that does not cover this
+                    # repository) has to stay visible as a CrashLoopBackOff
+                    # rather than retry silently forever.
+                    echo "snowplow: $failures consecutive failures, giving up" >&2
+                    exit 1
+                  fi
+                  sleep "$((failures * retry_delay))"
+                fi
+              done
+
+              exit 0
           resources:
             {{- toYaml (default $.Values.resources .resources) | nindent 12 }}
           env:

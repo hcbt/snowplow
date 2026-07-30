@@ -33,6 +33,47 @@
         in
         inputs.nivis.inputs.flake-parts.lib.mkFlake { inputs = allInputs; } module;
 
+      # Stands in for Runner.Listener so the container command can be RUN, not
+      # merely inspected. The rendered script is the only thing deciding whether
+      # a finished job costs a kubelet restart, and no amount of yq on the
+      # manifest can tell you that — so `chart-runner-supervision` executes it
+      # against this, with the real binary's two subcommands faked.
+      #
+      # Every invocation appends to $FAKE_LOG, which is what the assertions read.
+      fakeListener = pkgs.writeShellScript "Runner.Listener" ''
+        case "$1" in
+          configure)
+            # A workspace still holding the previous job's marker would mean the
+            # per-job wipe was lost when the loop replaced the restart.
+            if [ -e "$RUNNER_ROOT/leftover" ]; then
+              echo "dirty" >> "$FAKE_LOG"
+            fi
+            echo "configure" >> "$FAKE_LOG"
+            if [ "''${FAKE_CONFIGURE_FAIL:-0}" = 1 ]; then
+              exit 1
+            fi
+            exit 0
+            ;;
+          run)
+            echo "run" >> "$FAKE_LOG"
+            touch "$RUNNER_ROOT/leftover"
+            if [ "''${FAKE_RUN_TRAP:-0}" = 1 ]; then
+              # A job in flight: stay up until signalled, and record the signal.
+              trap 'echo "listener-term" >> "$FAKE_LOG"; exit 143' TERM
+              sleep 60 &
+              wait $!
+              exit 0
+            fi
+            sleep "''${FAKE_RUN_SECONDS:-0.2}"
+            exit "''${FAKE_RUN_EXIT:-0}"
+            ;;
+          *)
+            echo "unexpected subcommand: $1" >&2
+            exit 64
+            ;;
+        esac
+      '';
+
       # Renders the chart, then runs the given assertions with $manifests bound
       # to the rendered file.
       mkRenderCheck =
@@ -110,6 +151,12 @@
                 exit 1
               fi
 
+              if helm template test ${chart} --namespace ci --values ${exampleValues} \
+                   --set runnerBinary= > /dev/null 2>&1; then
+                echo "FAIL: chart rendered a container command with no Runner.Listener" >&2
+                exit 1
+              fi
+
               touch $out
             '';
 
@@ -122,8 +169,18 @@
                           "$(deployment | yq -N '.spec.template.spec.containers[].name' | tr '\n' ' ' | sed 's/ $//')" \
                           "containers named after the runners, in order"
 
-                        # Registration flags, read out of the container command itself.
-                        repoArgs="$(deployment | yq '.spec.template.spec.containers[0].args[1]')"
+                        # Registration flags, read out of the container command
+                        # itself — with comment lines stripped first. The command
+                        # explains at length why it supervises rather than execs,
+                        # and the word "--ephemeral" appears in that prose; match
+                        # the raw block and every assertion below silently tests
+                        # the comments instead of the code.
+                        command() {
+                          deployment | yq ".spec.template.spec.containers[$1].args[1]" \
+                            | grep -v '^[[:space:]]*#'
+                        }
+
+                        repoArgs="$(command 0)"
                         case "$repoArgs" in
                           *"--ephemeral"*) ;;
                           *) fail "ephemeral runner is missing --ephemeral" ;;
@@ -137,7 +194,7 @@
                           *) fail "string labels not passed to configure" ;;
                         esac
 
-                        orgArgs="$(deployment | yq '.spec.template.spec.containers[1].args[1]')"
+                        orgArgs="$(command 1)"
                         case "$orgArgs" in
                           *"--ephemeral"*) fail "per-runner ephemeral:false was ignored" ;;
                         esac
@@ -162,6 +219,28 @@
                         eq "/runners/my-repo" \
                           "$(deployment | yq '.spec.template.spec.containers[0].env[] | select(.name == "RUNNER_ROOT") | .value')" \
                           "each runner gets its own state directory"
+
+                        # The supervision loop's knobs must come from values
+                        # rather than being baked into the template.
+                        case "$repoArgs" in
+                          *"max_failures=5"*) ;;
+                          *) fail "restart.maxFailures not reaching the container command" ;;
+                        esac
+                        case "$repoArgs" in
+                          *"retry_delay=10"*) ;;
+                          *) fail "restart.retryDelaySeconds not reaching the container command" ;;
+                        esac
+                        case "$repoArgs" in
+                          *'"/bin/Runner.Listener" configure'*) ;;
+                          *) fail "runnerBinary not reaching the container command" ;;
+                        esac
+                        # `exec` handed the container over to a single listener,
+                        # so one job ended the container and the kubelet's
+                        # backoff became the job queue. See
+                        # checks.chart-runner-supervision for the behaviour.
+                        case "$repoArgs" in
+                          *"exec "*) fail "the container execs the listener instead of supervising it" ;;
+                        esac
 
                         # Per-runner resources override the top-level default.
                         eq "8Gi" "$(deployment | yq '.spec.template.spec.containers[1].resources.limits.memory')" \
@@ -227,6 +306,107 @@
                           "nss.enabled=false drops the /etc/passwd and /etc/group mounts"
           '';
         };
+
+        # The container command is the fix for MB-264-class stalls, and it can
+        # only be tested by RUNNING it. Asserting on the rendered string would
+        # pass just as happily for the `exec Runner.Listener` version this
+        # replaced — and that version is the bug: an ephemeral listener exits 0
+        # after one job, `restartPolicy: Always` cannot tell that from a crash,
+        # and the kubelet's backoff grows toward five minutes with every job.
+        # What follows are properties of the script's control flow.
+        chart-runner-supervision =
+          pkgs.runCommand "chart-runner-supervision"
+            {
+              nativeBuildInputs = [
+                pkgs.kubernetes-helm
+                pkgs.yq-go
+              ];
+            }
+            ''
+              export HELM_CACHE_HOME="$TMPDIR/cache" HELM_CONFIG_HOME="$TMPDIR/config" HELM_DATA_HOME="$TMPDIR/data"
+
+              fail() { echo "FAIL: $*" >&2; exit 1; }
+              eq() { [ "$1" = "$2" ] || fail "$3 (expected '$1', got '$2')"; }
+
+              # `runnerBinary` with no slash resolves through PATH, which is how
+              # the fake gets in front of a binary that does not exist here.
+              render() {
+                helm template test ${chart} --namespace ci --values ${exampleValues} \
+                  --set runnerBinary=Runner.Listener "$@" \
+                  | yq -N 'select(.kind == "Deployment") | .spec.template.spec.containers[0].args[1]'
+              }
+
+              mkdir -p "$TMPDIR/bin"
+              ln -s ${fakeListener} "$TMPDIR/bin/Runner.Listener"
+              export PATH="$TMPDIR/bin:$PATH"
+              export GITHUB_PAT="not-a-real-token"
+
+              render > "$TMPDIR/loop.sh"
+
+              # 1. A completed job must not exit the container. Under
+              #    restartPolicy: Always every exit is a restart, and restarts
+              #    are rate-limited — which is the whole defect.
+              export RUNNER_ROOT="$TMPDIR/root-loop" FAKE_LOG="$TMPDIR/log-loop"
+              : > "$FAKE_LOG"
+              rc=0
+              timeout -s KILL 5 bash "$TMPDIR/loop.sh" > "$TMPDIR/out-loop" 2>&1 || rc=$?
+              eq 137 "$rc" "the container exited by itself after a completed job instead of looping"
+
+              registrations=$(grep -c '^configure$' "$FAKE_LOG" || true)
+              [ "$registrations" -ge 3 ] \
+                || fail "expected a fresh registration per job, got $registrations in 5s"
+              eq "$registrations" "$(grep -c '^run$' "$FAKE_LOG" || true)" \
+                "every registration must be followed by exactly one listener run"
+              eq 0 "$(grep -c '^dirty$' "$FAKE_LOG" || true)" \
+                "the per-job workspace wipe was lost"
+
+              # 2. A runner that can never register must still crash — that is
+              #    how a PAT missing a repository announces itself — but only
+              #    after restart.maxFailures, never on the first refusal, and
+              #    never by spinning against api.github.com forever.
+              render --set restart.maxFailures=3 --set restart.retryDelaySeconds=0 > "$TMPDIR/fail.sh"
+              export RUNNER_ROOT="$TMPDIR/root-fail" FAKE_LOG="$TMPDIR/log-fail" FAKE_CONFIGURE_FAIL=1
+              : > "$FAKE_LOG"
+              rc=0
+              timeout -s KILL 30 bash "$TMPDIR/fail.sh" > "$TMPDIR/out-fail" 2>&1 || rc=$?
+              eq 1 "$rc" "a runner that cannot register must exit non-zero rather than retry forever"
+              eq 3 "$(grep -c '^configure$' "$FAKE_LOG" || true)" \
+                "gives up after exactly restart.maxFailures attempts"
+              eq 0 "$(grep -c '^run$' "$FAKE_LOG" || true)" \
+                "no listener may start when registration failed"
+              unset FAKE_CONFIGURE_FAIL
+
+              # 3. SIGTERM must reach the listener. The command used to exec it,
+              #    so the kubelet's TERM landed on it directly; a supervising
+              #    shell that swallows the signal leaves the job running until
+              #    terminationGracePeriodSeconds expires and SIGKILL abandons it.
+              export RUNNER_ROOT="$TMPDIR/root-term" FAKE_LOG="$TMPDIR/log-term" FAKE_RUN_TRAP=1
+              : > "$FAKE_LOG"
+              bash "$TMPDIR/loop.sh" > "$TMPDIR/out-term" 2>&1 &
+              supervisor=$!
+              # Turns a hang into a failed assertion instead of a stuck build.
+              ( sleep 30; kill -KILL "$supervisor" 2>/dev/null ) &
+              watchdog=$!
+
+              for _ in $(seq 1 200); do
+                if grep -q '^run$' "$FAKE_LOG" 2>/dev/null; then break; fi
+                sleep 0.1
+              done
+              grep -q '^run$' "$FAKE_LOG" || fail "the listener never started"
+
+              kill -TERM "$supervisor"
+              rc=0
+              wait "$supervisor" || rc=$?
+              kill "$watchdog" 2>/dev/null || true
+
+              eq 0 "$rc" "SIGTERM must shut the supervisor down cleanly and promptly"
+              grep -q '^listener-term$' "$FAKE_LOG" \
+                || fail "SIGTERM was not forwarded to the in-flight listener"
+              eq 1 "$(grep -c '^run$' "$FAKE_LOG" || true)" \
+                "a new job was started after SIGTERM"
+
+              touch $out
+            '';
 
         # `flakeModules.default` is what the README leads with, and nothing else
         # here evaluates it — `checks.image-evaluates` calls image.nix directly
