@@ -38,18 +38,54 @@ runners: []
 #   url: https://github.com/OWNER/REPO
 #   labels: nix-x64
 
-# Ephemeral runners deregister after a single job and the listener exits; the
-# kubelet then restarts the container, which re-registers before the next job.
-# That is what gives every job a clean workspace. Registration happens in the
-# container's own startup rather than an initContainer precisely because
-# initContainers do not re-run on a container restart, only on a pod restart.
+# Ephemeral runners deregister after a single job and the listener exits. The
+# container re-registers and starts a new listener itself, in a loop, which is
+# what gives every job a clean workspace.
+#
+# The loop is not decoration. Letting the container exit and having the kubelet
+# restart it looks equivalent and is not: `restartPolicy: Always` cannot
+# distinguish a completed job from a crash, so every job costs a restart, the
+# kubelet applies exponential backoff toward its 5-minute cap, the pod reports
+# CrashLoopBackOff, and each new job waits out the timer before any runner
+# exists to claim it. Supervising the listener in-container means the happy path
+# never exits, so there is no restart to back off from. See `restart` below for
+# what happens when a runner genuinely fails.
+#
+# Registration happens in the container's own startup rather than an
+# initContainer because initContainers do not re-run per job at all.
 #
 # Set false for persistent runners (one long-lived registration serving many
-# jobs, workspace reused between them).
+# jobs, workspace reused between them). The loop still supervises them, so a
+# listener that dies is replaced instead of leaving the pod short a runner.
 ephemeral: true
+
+# How the supervision loop reacts to a runner that fails rather than finishing a
+# job: a registration that is refused (a PAT missing `Administration: read and
+# write` on that entry's repository returns 403 here) or a listener that exits
+# non-zero.
+#
+# Such a runner must not become an infinite hot loop against api.github.com, and
+# it must stay VISIBLE — a crashlooping container is how a bad credential
+# announces itself. So consecutive failures are retried with a growing delay and
+# then given up on, exiting non-zero, which is the one case where the kubelet's
+# restart handling is the right tool.
+#
+# A completed job resets the counter, so an occasional failure never accumulates
+# toward the limit.
+restart:
+  # Delay before retrying, multiplied by the number of consecutive failures.
+  # With the defaults a container waits 10s, 20s, 30s, 40s and then exits.
+  retryDelaySeconds: 10
+  # Consecutive failures tolerated before the container gives up.
+  maxFailures: 5
 
 # Parent of the per-runner state directories (.runner, .credentials, _work).
 runnerRoot: /runners
+
+# Runner.Listener inside the image. A value containing no `/` is resolved
+# through PATH; anything else is used as an absolute path. Only needs changing
+# for an image that does not put the binary where `lib.mkRunnerImage` does.
+runnerBinary: /bin/Runner.Listener
 
 # The credential. Any operator or manual `kubectl create secret` can produce it;
 # the chart only reads it.
