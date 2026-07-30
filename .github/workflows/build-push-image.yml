@@ -1,26 +1,12 @@
 # Reusable workflow: build a runner image with Nix and push it to a registry.
 #
-# Call it from the repository that defines the image:
+# The implementation moved to coldstart along with the image builder. This is a
+# forwarder, kept so existing callers do not have to change:
 #
-#   jobs:
-#     runner-image:
-#       permissions:
-#         contents: read
-#         packages: write
-#       uses: hcbt/snowplow/.github/workflows/build-push-image.yml@master
-#       with:
-#         package: ci-runner
-#         image: ghcr.io/${{ github.repository_owner }}/ci-runner
-#       secrets:
-#         registry-password: ${{ secrets.GITHUB_TOKEN }}
+#   uses: hcbt/snowplow/.github/workflows/build-push-image.yml@master
 #
-# Pushed with skopeo rather than docker: there is no daemon involved, and the
-# image is a docker-archive that Nix already produced.
-#
-# Two tags by default: the commit SHA, and `latest`. Keep `latest` — reproducible
-# images are all stamped at epoch 0, so any "newest build" tag ordering sees them
-# as equally old and never picks a winner. Tracking the digest of one mutable tag
-# is the strategy that works (argocd-image-updater: `updateStrategy: digest`).
+# New callers should use coldstart's directly — there is nothing runner-specific
+# left in here.
 name: build-push-image
 
 on:
@@ -60,6 +46,10 @@ on:
         description: Install Nix. Set false when the runner image already ships it.
         type: boolean
         default: true
+      free-disk-space:
+        description: Reclaim GitHub-hosted runner disk before building.
+        type: boolean
+        default: false
     secrets:
       registry-password:
         description: Registry password or token.
@@ -67,36 +57,16 @@ on:
 
 jobs:
   build-push:
-    runs-on: ${{ inputs.runs-on }}
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: cachix/install-nix-action@v31
-        if: inputs.install-nix
-        with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
-
-      - name: Build image
-        run: nix build '${{ inputs.flake-ref }}#packages.${{ inputs.system }}.${{ inputs.package }}' -L
-
-      - name: Push
-        env:
-          IMAGE: ${{ inputs.image }}
-          TAGS: ${{ inputs.tags }}
-          CREDS: ${{ inputs.registry-username }}:${{ secrets.registry-password }}
-        run: |
-          set -eu
-          archive="$(readlink -f result)"
-          # skopeo comes from the image when it ships one, and from nixpkgs
-          # otherwise, so this works on hosted and self-hosted runners alike.
-          if command -v skopeo > /dev/null; then
-            skopeo=skopeo
-          else
-            skopeo="nix shell nixpkgs#skopeo -c skopeo"
-          fi
-          echo "$TAGS" | while read -r tag; do
-            [ -n "$tag" ] || continue
-            echo "pushing $IMAGE:$tag"
-            $skopeo copy --all "docker-archive:$archive" "docker://$IMAGE:$tag" --dest-creds "$CREDS"
-          done
+    uses: hcbt/coldstart/.github/workflows/build-push-image.yml@master
+    with:
+      package: ${{ inputs.package }}
+      image: ${{ inputs.image }}
+      flake-ref: ${{ inputs.flake-ref }}
+      system: ${{ inputs.system }}
+      tags: ${{ inputs.tags }}
+      registry-username: ${{ inputs.registry-username }}
+      runs-on: ${{ inputs.runs-on }}
+      install-nix: ${{ inputs.install-nix }}
+      free-disk-space: ${{ inputs.free-disk-space }}
+    secrets:
+      registry-password: ${{ secrets.registry-password }}

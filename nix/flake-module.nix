@@ -10,9 +10,14 @@
 #
 # Kept in its own file rather than inline in lib.nix so `checks.flake-module`
 # can import and evaluate it without referring to this flake's own outputs.
+#
+# `mkImage` is applied at import time by lib.nix. It cannot be read out of
+# `inputs` here: flake-parts hands this module the CONSUMING flake's inputs,
+# which have no coldstart in them.
+{ mkImage }:
 { lib, flake-parts-lib, ... }:
 let
-  mkRunnerImage = args: import ./image.nix args;
+  mkRunnerImage = args: import ./image.nix { inherit mkImage; } args;
 
   userType = lib.types.submodule {
     options = {
