@@ -53,6 +53,14 @@
 let
   inherit (pkgs) lib;
 
+  # /usr/bin/env, and the internal node external the runner needs to evaluate
+  # its own expression functions. Both are things a from-scratch Nix image is
+  # missing rather than things it gets wrong; image-shims.nix explains each at
+  # length, and checks.nix executes both.
+  shims = import ./image-shims.nix { inherit pkgs; };
+
+  runner = shims.withInternalNode runnerPackage;
+
   defaultUser = {
     name = "runner";
     uid = 1000;
@@ -131,7 +139,10 @@ pkgs.dockerTools.buildLayeredImage {
   contents = [
     # Provides bin/Runner.Listener, which performs both the
     # PAT -> registration-token exchange and the job loop; no wrapper needed.
-    runnerPackage
+    runner
+
+    # /usr/bin/env, so a script carrying the portable shebang can exec.
+    shims.usrBinEnv
 
     # Toolchain the runner shells out to. actions/checkout and most other
     # JavaScript actions need node; everything else here is what a shell step

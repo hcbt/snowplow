@@ -189,6 +189,24 @@ from-scratch image has no `/etc/passwd` entry for that uid. Images built here
 carry one, and the chart also mounts one via ConfigMap (`nss.enabled`) — that
 mount is what lets you recover when a bad image cannot build its own replacement.
 
+**`/usr/bin/env: bad interpreter: No such file or directory`** — the kernel
+resolves a shebang's interpreter path literally, and a from-scratch image has no
+`/usr/bin`. Nix patches its own shebangs to absolute store paths, so this stays
+invisible until the first script Nix did not patch runs — and
+`#!/usr/bin/env bash|python3|node` is the dominant portable shebang, so that is
+any vendored tool, any installer, any script in a checkout. Images built here
+provide `/usr/bin/env`.
+
+**`An error occurred trying to start process '…/externals/node20/bin/node'`**,
+from a step using `hashFiles()` — `hashFiles()` is not a pure expression: the
+runner shells out to a bundled node to evaluate it, at a version hard-coded to
+node20 and resolved inside the runner's own store path. nixpkgs links only
+`externals/node24` (`nodejs_20` is EOL and gone from nixpkgs), so on a stock
+`github-runner` every `hashFiles()` fails — and it fails while the step's
+expressions are being _evaluated_, so the step never starts, every later step is
+skipped, and a step meant to report the job's verdict is skipped with them. A
+failed job can read as green. Images built here add the missing external.
+
 **`chmod: changing permissions of '…': Operation not permitted` in every
 unpackPhase** — a pod `fsGroup`. Kubelet marks the volume root setgid, every
 directory created beneath it inherits it, `unpackPhase` runs `chmod -R u+w`
@@ -259,6 +277,12 @@ command as text, it strips comment lines first.
 container command against a fake `Runner.Listener`, because whether a finished
 job costs a kubelet restart is a property of that script's control flow and no
 assertion on the manifest can see it. See [`nix/checks.nix`](nix/checks.nix).
+
+The image's two shims are tested the same way: `usr-bin-env-runs-scripts` execs a
+script carrying a portable shebang, and `hashfiles-evaluates` runs the runner's
+own `hashFiles` script through the internal node and then changes the file to
+prove the digest is a hash and not a constant. `ci.yml` repeats both probes
+inside the loaded image, where `/usr/bin/env` is really `/usr/bin/env`.
 
 ## License
 
