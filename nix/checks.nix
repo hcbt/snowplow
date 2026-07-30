@@ -10,17 +10,20 @@
       chart = ../chart;
       exampleValues = ../examples/values-example.yaml;
 
-      # What the image adds on top of nixpkgs. Imported directly rather than
-      # reached for inside the built image: both shims are only meaningfully
-      # tested by running them, and building the image to do that would pull ~2G
-      # of closure into every `nix flake check`. `ci.yml` runs the same two
-      # probes inside the loaded image, at /usr/bin/env and /bin/Runner.Listener.
+      # The runner's bundled internal node. Imported directly rather than
+      # reached for inside the built image: it is only meaningfully tested by
+      # RUNNING it, and building the image to do that would pull ~2G of closure
+      # into every `nix flake check`.
+      #
+      # /usr/bin/env used to be tested here too. It is coldstart's shim now, and
+      # coldstart's `usr-bin-env-runs-scripts` covers it; `ci.yml` still probes
+      # both inside the loaded image.
       shims = import ./image-shims.nix { inherit pkgs; };
 
       # `nix flake check` does not look at `flake.lib` or `flake.flakeModules`
       # ("The following flake outputs are unchecked"), so the consumer-facing
       # half of this repo is only covered by the two checks that use these.
-      snowplow = (import ./lib.nix { inherit lib; }).flake;
+      snowplow = (import ./lib.nix { inherit lib inputs; }).flake;
 
       # Evaluates a flake-parts flake the way a consumer would, without needing
       # this flake's own outputs. `self` has to carry `inputs`: flake-parts
@@ -415,35 +418,6 @@
               touch $out
             '';
 
-        # The kernel resolves a shebang's interpreter path literally, so the
-        # only thing that proves the image's /usr/bin/env works is EXEC'ing a
-        # script through it. `test -e` would pass for a dangling symlink and
-        # `test -x` for a directory, and a present-but-unusable path is exactly
-        # the failure this guards:
-        #
-        #   devenv: /usr/bin/env: bad interpreter: No such file or directory
-        usr-bin-env-runs-scripts =
-          pkgs.runCommand "usr-bin-env-runs-scripts"
-            {
-              nativeBuildInputs = [ pkgs.bashInteractive ];
-            }
-            ''
-              fail() { echo "FAIL: $*" >&2; exit 1; }
-
-              # Written the way a third-party script is written — an interpreter
-              # NAME, which only /usr/bin/env can turn into a path.
-              printf '%s\n' \
-                '#!${shims.usrBinEnv}/usr/bin/env bash' \
-                'echo "interpreter-resolved-from-PATH"' > portable
-              chmod +x portable
-
-              ran=$(./portable) || fail "a #!…/usr/bin/env bash script could not exec"
-              [ "$ran" = "interpreter-resolved-from-PATH" ] \
-                || fail "the script ran under something unexpected (got '$ran')"
-
-              touch $out
-            '';
-
         # `flakeModules.default` is what the README leads with, and nothing else
         # here evaluates it — `checks.image-evaluates` calls image.nix directly
         # and bypasses the module entirely. Evaluation IS the test: a broken
@@ -596,7 +570,7 @@
 
         image-evaluates =
           let
-            mkRunnerImage = args: import ./image.nix args;
+            mkRunnerImage = args: import ./image.nix { inherit (inputs.coldstart.lib) mkImage; } args;
             variants = [
               (mkRunnerImage { inherit pkgs; })
               (mkRunnerImage {

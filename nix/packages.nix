@@ -4,7 +4,7 @@
 #
 #   nix build .#runner-image
 #   nix build .#chart
-{ ... }:
+{ inputs, ... }:
 {
   perSystem =
     { pkgs, lib, ... }:
@@ -30,7 +30,7 @@
         # No org.opencontainers.image.source label: that label links a package
         # to the repository publishing it, so it belongs in the consumer's own
         # call, not in a reference build.
-        runner-image = import ./image.nix { inherit pkgs; };
+        runner-image = import ./image.nix { inherit (inputs.coldstart.lib) mkImage; } { inherit pkgs; };
       };
     };
 }

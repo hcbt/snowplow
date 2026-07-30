@@ -1,31 +1,21 @@
-# The two things the image has to supply itself, because nothing upstream does.
+# The one thing the RUNNER image has to supply itself, because nothing upstream
+# does.
 #
-# Both are absences rather than misconfigurations, so neither shows up when the
-# image is built, or inspected, or started — only when a job happens to need
-# them. Both cost a full CI round-trip to find.
+# It is an absence rather than a misconfiguration, so it does not show up when
+# the image is built, or inspected, or started — only when a job happens to
+# need it, at the cost of a full CI round-trip.
 #
-# Kept out of image.nix so `checks.nix` can exercise them directly: proving
-# either one works means RUNNING it, and building the whole image to do that
-# would pull ~2G of closure into `nix flake check`.
+# The generic shims that used to live here — /usr/bin/env and the skopeo trust
+# policy — moved to coldstart, which every image built here now goes through.
+#
+# Kept out of image.nix so `checks.nix` can exercise this directly: proving it
+# works means RUNNING it, and building the whole image to do that would pull
+# ~2G of closure into `nix flake check`.
 { pkgs }:
 let
   inherit (pkgs) lib;
 in
 {
-  # `#!/usr/bin/env <interp>` is the dominant portable shebang, and the kernel
-  # resolves that path literally — no PATH search, no fallback, no error the
-  # script itself can handle. Nix patches its own shebangs to absolute store
-  # paths, so nothing in the base image needs /usr/bin/env and its absence stays
-  # invisible until the first script Nix did not patch tries to run:
-  #
-  #   devenv: /usr/bin/env: bad interpreter: No such file or directory
-  #
-  # A symlink to the `env` already in the image, so this adds no closure.
-  usrBinEnv = pkgs.runCommand "usr-bin-env" { } ''
-    mkdir -p $out/usr/bin
-    ln -s ${lib.getExe' pkgs.coreutils-full "env"} $out/usr/bin/env
-  '';
-
   # The runner evaluates the expression functions it implements itself — most
   # visibly `hashFiles()` — by spawning a bundled "internal" node. That version
   # is hard-coded to node20: `NodeUtil._defaultNodeVersion`, with node20 the

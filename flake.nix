@@ -10,6 +10,16 @@
     # flake-parts builds `pkgs` from the CONSUMING flake's own nixpkgs input,
     # so this cannot be dropped.
     nixpkgs.follows = "nivis/nixpkgs";
+
+    # The generic container half, extracted from this repo: the OCI image
+    # builder, /usr/bin/env, the /etc/passwd entry, the registered Nix
+    # database, the container-shaped nix.conf and the skopeo trust policy.
+    # What stays here is the GitHub Actions part — Runner.Listener, its
+    # bundled node, and the chart that supervises it.
+    coldstart = {
+      url = "github:hcbt/coldstart";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
