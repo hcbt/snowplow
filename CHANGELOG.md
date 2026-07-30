@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/hcbt/snowplow/compare/v0.2.1...v0.2.2) (2026-07-30)
+
+
+### Fixed
+
+* **image:** provide /usr/bin/env and the runner's internal node external ([#10](https://github.com/hcbt/snowplow/issues/10)) ([0175657](https://github.com/hcbt/snowplow/commit/0175657d5b8f2308362a164fcf774c7a5fc8fa6a))
+
 ## [0.2.1](https://github.com/hcbt/snowplow/compare/v0.2.0...v0.2.1) (2026-07-30)
 
 
