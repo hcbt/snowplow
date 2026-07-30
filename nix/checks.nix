@@ -10,6 +10,13 @@
       chart = ../chart;
       exampleValues = ../examples/values-example.yaml;
 
+      # What the image adds on top of nixpkgs. Imported directly rather than
+      # reached for inside the built image: both shims are only meaningfully
+      # tested by running them, and building the image to do that would pull ~2G
+      # of closure into every `nix flake check`. `ci.yml` runs the same two
+      # probes inside the loaded image, at /usr/bin/env and /bin/Runner.Listener.
+      shims = import ./image-shims.nix { inherit pkgs; };
+
       # `nix flake check` does not look at `flake.lib` or `flake.flakeModules`
       # ("The following flake outputs are unchecked"), so the consumer-facing
       # half of this repo is only covered by the two checks that use these.
@@ -408,6 +415,35 @@
               touch $out
             '';
 
+        # The kernel resolves a shebang's interpreter path literally, so the
+        # only thing that proves the image's /usr/bin/env works is EXEC'ing a
+        # script through it. `test -e` would pass for a dangling symlink and
+        # `test -x` for a directory, and a present-but-unusable path is exactly
+        # the failure this guards:
+        #
+        #   devenv: /usr/bin/env: bad interpreter: No such file or directory
+        usr-bin-env-runs-scripts =
+          pkgs.runCommand "usr-bin-env-runs-scripts"
+            {
+              nativeBuildInputs = [ pkgs.bashInteractive ];
+            }
+            ''
+              fail() { echo "FAIL: $*" >&2; exit 1; }
+
+              # Written the way a third-party script is written — an interpreter
+              # NAME, which only /usr/bin/env can turn into a path.
+              printf '%s\n' \
+                '#!${shims.usrBinEnv}/usr/bin/env bash' \
+                'echo "interpreter-resolved-from-PATH"' > portable
+              chmod +x portable
+
+              ran=$(./portable) || fail "a #!…/usr/bin/env bash script could not exec"
+              [ "$ran" = "interpreter-resolved-from-PATH" ] \
+                || fail "the script ran under something unexpected (got '$ran')"
+
+              touch $out
+            '';
+
         # `flakeModules.default` is what the README leads with, and nothing else
         # here evaluates it — `checks.image-evaluates` calls image.nix directly
         # and bypasses the module entirely. Evaluation IS the test: a broken
@@ -508,6 +544,56 @@
       # option path is well-formed, without pulling ~2G of closure into a check.
       # `nix build .#runner-image` in CI is what proves it builds.
       // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+        # `hashFiles()` is not evaluated in-process: the runner spawns its
+        # internal node on `hashFiles/index.js` and reads the digest back off
+        # stderr. So this runs that exact command, resolving the node the
+        # same way HashFilesFunction does — from the runner's own directory —
+        # and then changes the file to prove the digest is a hash of the
+        # contents and not a constant. Asserting `externals/node20` merely
+        # exists would pass for a dangling symlink, and asserting on the
+        # image's file list would pass for a node that cannot run the
+        # script.
+        #
+        # Linux-only for the same reason as image-evaluates: github-runner is
+        # substitutable there, and this must not become a dotnet build on a
+        # laptop.
+        hashfiles-evaluates =
+          let
+            runner = shims.withInternalNode pkgs.github-runner;
+          in
+          pkgs.runCommand "hashfiles-evaluates" { } ''
+            fail() { echo "FAIL: $*" >&2; exit 1; }
+
+            # <runner root>/externals/<internal version>/bin/node, where the
+            # runner root is the parent of the directory Runner.Worker lives
+            # in. Not $out/bin: the worker never goes through the wrappers.
+            root=${runner}/lib
+            node="$root/externals/node20/bin/node"
+            [ -x "$node" ] || fail "no internal node at $node"
+
+            # The script is a directory; node resolves index.js inside it.
+            # Patterns arrive in $patterns, the cwd is the workspace, and the
+            # digest comes back on stderr between __OUTPUT__ markers.
+            hash_of() {
+              printf '%s' "$1" > "$workspace/hashed"
+              ( cd "$workspace" && patterns="hashed" "$node" "$root/github-runner/hashFiles" 2>&1 ) \
+                | sed -n 's/.*__OUTPUT__\(.*\)__OUTPUT__.*/\1/p'
+            }
+
+            workspace=$PWD/workspace
+            mkdir -p "$workspace"
+
+            first=$(hash_of hello)
+            printf '%s' "$first" | grep -Eq '^[0-9a-f]{64}$' \
+              || fail "hashFiles() produced no digest (got '$first')"
+
+            second=$(hash_of world)
+            [ "$first" != "$second" ] \
+              || fail "hashFiles() returned the same digest for different contents"
+
+            touch $out
+          '';
+
         image-evaluates =
           let
             mkRunnerImage = args: import ./image.nix args;

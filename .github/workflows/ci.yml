@@ -35,6 +35,39 @@ jobs:
       # write access to packages.
       - run: nix build .#runner-image -L
 
+      # Two things that only exist at runtime, asserted in a real container at
+      # the real paths. `nix flake check` runs both probes against the store
+      # paths (checks.usr-bin-env-runs-scripts, checks.hashfiles-evaluates), but
+      # nothing there can prove `/usr/bin/env` is `/usr/bin/env` once the image
+      # is the root filesystem — a nix build has no container to be inside of.
+      #
+      # Both failures are silent in the worst way: a portable shebang produces
+      # "bad interpreter" from a tool that looked installed, and hashFiles()
+      # fails during expression evaluation, which skips the step and every step
+      # after it — including one meant to report the job's verdict.
+      - name: The image must exec a portable shebang and evaluate hashFiles()
+        run: |
+          image=$(docker load --input result | sed -n 's/^Loaded image: //p')
+          test -n "$image"
+          docker run --rm "$image" /bin/bash -euo pipefail -c '
+            mkdir -p /tmp/probe && cd /tmp/probe
+
+            # An interpreter NAME, the way a third-party script writes it: only
+            # /usr/bin/env can turn that into a path.
+            printf "%s\n" "#!/usr/bin/env bash" "echo portable-shebang-ok" > probe
+            chmod +x probe
+            ./probe | grep -qx portable-shebang-ok
+
+            # Where the runner itself looks for the internal node it evaluates
+            # hashFiles() with: the parent of the directory Runner.Worker lives
+            # in, which is inside the runner package, not $RUNNER_ROOT.
+            root=$(dirname "$(dirname "$(readlink -f /bin/Runner.Listener)")")/lib
+            echo hello > a.txt
+            patterns=a.txt "$root/externals/node20/bin/node" \
+              "$root/github-runner/hashFiles" 2>&1 \
+              | grep -Eq "__OUTPUT__[0-9a-f]{64}__OUTPUT__"
+          '
+
   # Exercises build-push-image.yml — the workflow consumers call — end to end:
   # input plumbing, the skopeo-or-nixpkgs fallback, and the push loop. Nothing
   # else runs it, so a break there would only ever surface in someone else's
