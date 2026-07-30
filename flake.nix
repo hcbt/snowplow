@@ -5,7 +5,7 @@
     # The shared scaffolding: treefmt, the git hooks, mkDevShell, the app
     # helpers, and the generated GitHub-side files. Replaces the treefmt-nix
     # and git-hooks inputs this flake used to declare itself.
-    nivis.url = "github:hcbt/nivis/v0.7.0";
+    nivis.url = "github:hcbt/nivis/v0.7.1";
 
     # flake-parts builds `pkgs` from the CONSUMING flake's own nixpkgs input,
     # so this cannot be dropped.
