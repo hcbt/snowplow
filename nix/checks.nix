@@ -365,8 +365,16 @@
               registrations=$(grep -c '^configure$' "$FAKE_LOG" || true)
               [ "$registrations" -ge 3 ] \
                 || fail "expected a fresh registration per job, got $registrations in 5s"
-              eq "$registrations" "$(grep -c '^run$' "$FAKE_LOG" || true)" \
-                "every registration must be followed by exactly one listener run"
+              # SIGKILL lands at an arbitrary point, so the final iteration can
+              # be torn between its `configure` and its `run`. That is an
+              # artefact of how this check stops the loop, not a defect in the
+              # loop: the invariant is that no registration is ever skipped or
+              # doubled, which allows runs to trail registrations by at most the
+              # one iteration the kill interrupted. Asserting strict equality
+              # made this check fail roughly one run in ten.
+              runs=$(grep -c '^run$' "$FAKE_LOG" || true)
+              [ "$runs" -eq "$registrations" ] || [ "$runs" -eq "$((registrations - 1))" ] \
+                || fail "every registration must be followed by exactly one listener run (registrations=$registrations runs=$runs)"
               eq 0 "$(grep -c '^dirty$' "$FAKE_LOG" || true)" \
                 "the per-job workspace wipe was lost"
 
