@@ -5,7 +5,7 @@
     # The shared scaffolding: treefmt, the git hooks, mkDevShell, the app
     # helpers, and the generated GitHub-side files. Replaces the treefmt-nix
     # and git-hooks inputs this flake used to declare itself.
-    nivis.url = "github:hcbt/nivis/v0.8.1";
+    nivis.url = "github:hcbt/nivis/v0.8.2";
 
     # flake-parts builds `pkgs` from the CONSUMING flake's own nixpkgs input,
     # so this cannot be dropped.
@@ -17,7 +17,7 @@
     # What stays here is the GitHub Actions part — Runner.Listener, its
     # bundled node, and the chart that supervises it.
     coldstart = {
-      url = "github:hcbt/coldstart/v0.3.0";
+      url = "github:hcbt/coldstart/v0.3.1";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
