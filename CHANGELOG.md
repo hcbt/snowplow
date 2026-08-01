@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.0](https://github.com/hcbt/snowplow/compare/v0.2.3...v0.3.0) (2026-08-01)
+
+
+### Added
+
+* **chart:** let consumers add labels to the rendered Namespace ([#19](https://github.com/hcbt/snowplow/issues/19)) ([6784497](https://github.com/hcbt/snowplow/commit/6784497b8362796d6521c6b4ce5f4f28d7a64118))
+
+
+### Fixed
+
+* **checks:** stop chart-runner-supervision failing on a torn final iteration ([#21](https://github.com/hcbt/snowplow/issues/21)) ([53e3e76](https://github.com/hcbt/snowplow/commit/53e3e76def6499191038dd8d186477bf128c2386))
+
 ## [0.2.3](https://github.com/hcbt/snowplow/compare/v0.2.2...v0.2.3) (2026-07-30)
 
 
