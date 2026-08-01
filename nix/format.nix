@@ -5,6 +5,9 @@
 {
   perSystem = {
     treefmt.settings.global.excludes = [
+      # Source for `repo.extraFiles`; the generated copies are already
+      # excluded, and formatting only one side leaves them unequal.
+      "nix/ci/**"
       "LICENSE"
       # Helm templates are Go-templated YAML; prettier cannot parse `{{ … }}`.
       "chart/templates/*"
