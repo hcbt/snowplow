@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/hcbt/snowplow/compare/v0.3.0...v0.3.1) (2026-08-01)
+
+
+### Fixed
+
+* **deps:** bump nivis to v0.8.2 and coldstart to v0.3.1 ([#23](https://github.com/hcbt/snowplow/issues/23)) ([808b7dc](https://github.com/hcbt/snowplow/commit/808b7dc5f3cf2a94115ad01d643dea125b48e482))
+
 ## [0.3.0](https://github.com/hcbt/snowplow/compare/v0.2.3...v0.3.0) (2026-08-01)
 
 
