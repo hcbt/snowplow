@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/hcbt/snowplow/compare/v0.3.1...v0.3.2) (2026-08-01)
+
+
+### Fixed
+
+* **shell:** define the dev shell in flake.nix instead of nix/shells.nix ([#25](https://github.com/hcbt/snowplow/issues/25)) ([900f9eb](https://github.com/hcbt/snowplow/commit/900f9eb4c4fde1efa45ab05b1230c7425fdfd6cd))
+
 ## [0.3.1](https://github.com/hcbt/snowplow/compare/v0.3.0...v0.3.1) (2026-08-01)
 
 
