@@ -206,6 +206,13 @@ terminationGracePeriodSeconds: 3600
 namespace:
   create: false
 
+  # Extra labels for the rendered Namespace, merged after the chart's own.
+  #
+  # This exists for Pod Security Admission. `pod-security.kubernetes.io/enforce`
+  # has to sit on the Namespace object, so when this chart renders the Namespace
+  # the consumer has nowhere else to put it.
+  labels: {}
+
 # argocd-image-updater needs to read this namespace's pull secret to query the
 # registry for new tags. Without the Role it logs `secrets "…" is forbidden` and
 # silently never updates the image.
