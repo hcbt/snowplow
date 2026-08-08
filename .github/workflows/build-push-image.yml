@@ -57,7 +57,7 @@ on:
 
 jobs:
   build-push:
-    uses: hcbt/coldstart/.github/workflows/build-push-image.yml@v0.3.1
+    uses: hcbt/coldstart/.github/workflows/build-push-image.yml@v0.3.2
     with:
       package: ${{ inputs.package }}
       image: ${{ inputs.image }}
