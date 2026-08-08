@@ -4,7 +4,7 @@
 #   inputs.snowplow.lib.renderChart     render the chart to plain manifests
 #   inputs.snowplow.lib.chart           the chart source, for ArgoCD/helm
 #   inputs.snowplow.flakeModules.default  typed options instead of the raw call
-{ lib, inputs, ... }:
+{ lib, inputs }:
 let
   # coldstart's image builder is applied HERE, once, rather than reached for
   # inside `image.nix` or `flake-module.nix`. flake-parts threads the CONSUMING
@@ -47,11 +47,11 @@ let
       '';
 in
 {
-  flake = {
-    lib = {
-      inherit mkRunnerImage renderChart chart;
-    };
-
-    flakeModules.default = import ./flake-module.nix { inherit mkImage; };
+  lib = {
+    inherit mkRunnerImage renderChart chart;
   };
+
+  # Still exported, even though this flake no longer runs flake-parts itself.
+  # stakles imports it to declare `snowplow.images.github-runner-image`.
+  flakeModules.default = import ./flake-module.nix { inherit mkImage; };
 }
