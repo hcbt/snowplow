@@ -20,8 +20,14 @@ on:
         description: Target image without a tag, e.g. `ghcr.io/OWNER/NAME`.
         type: string
         required: true
+      builder:
+        description: |
+          How to build. `flake` runs `nix build`; `devenv` runs
+          `devenv build outputs.<package>` for a repository with no flake.
+        type: string
+        default: flake
       flake-ref:
-        description: Flake to build from.
+        description: Flake to build from. Ignored when `builder` is `devenv`.
         type: string
         default: "."
       system:
@@ -57,9 +63,10 @@ on:
 
 jobs:
   build-push:
-    uses: hcbt/coldstart/.github/workflows/build-push-image.yml@v0.3.1
+    uses: hcbt/coldstart/.github/workflows/build-push-image.yml@master
     with:
       package: ${{ inputs.package }}
+      builder: ${{ inputs.builder }}
       image: ${{ inputs.image }}
       flake-ref: ${{ inputs.flake-ref }}
       system: ${{ inputs.system }}
