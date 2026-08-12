@@ -21,11 +21,25 @@ let
   shared = import ./image-options.nix { inherit lib mkImage; };
 in
 {
+  options.snowplow.pkgs = lib.mkOption {
+    type = lib.types.raw;
+    default = pkgs;
+    defaultText = "pkgs";
+    description = ''
+      The package set the images are BUILT from.
+
+      Defaults to the environment's `pkgs`, which for a devenv project is
+      devenv's own channel. An image that has to stay on a different nixpkgs —
+      the one its consumers were pinned against — sets this instead. Getting it
+      wrong rebuilds the image from another package set without saying so.
+    '';
+  };
+
   options.snowplow.images = lib.mkOption {
     type = lib.types.attrsOf shared.imageType;
     default = { };
     description = "Runner images to build, one output per attribute.";
   };
 
-  config.outputs = shared.buildImages pkgs config.snowplow.images;
+  config.outputs = shared.buildImages config.snowplow.pkgs config.snowplow.images;
 }
