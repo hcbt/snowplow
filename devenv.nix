@@ -85,13 +85,13 @@ in
   # `packages` and `checks` both become `outputs`. A check here was always a
   # derivation, so building one IS running it.
   outputs =
-    import ./nix/packages.nix { inherit inputs; } {
+    import ./nix/packages.nix { } {
       pkgs = projectPkgs;
-      inherit lib;
+      inherit lib mkImage;
     }
-    // import ./nix/checks.nix { inherit inputs; } {
+    // import ./nix/checks.nix { } {
       pkgs = projectPkgs;
-      inherit lib;
+      inherit lib mkImage;
     };
 
   # The reference image, through this repository's OWN devenv module — the same

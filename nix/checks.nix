@@ -2,8 +2,12 @@
 # against the rendered YAML with yq rather than grep — the templates carry long
 # comments that survive into the output, so a grep for `--ephemeral` matches a
 # comment about ephemeral runners whether or not the flag is there.
-{ inputs }:
-{ pkgs, lib }:
+{ }:
+{
+  pkgs,
+  lib,
+  mkImage,
+}:
 let
   chart = ../chart;
   exampleValues = ../examples/values-example.yaml;
@@ -21,25 +25,8 @@ let
   # `nix flake check` does not look at `flake.lib` or `flake.flakeModules`
   # ("The following flake outputs are unchecked"), so the consumer-facing
   # half of this repo is only covered by the two checks that use these.
-  snowplow = import ./lib.nix { inherit lib inputs; };
+  snowplow = import ./lib.nix { inherit lib mkImage; };
 
-  # Evaluates a flake-parts flake the way a consumer would, without needing
-  # this flake's own outputs. `self` has to carry `inputs`: flake-parts
-  # reads `self.inputs` to build the `inputs'` per-system arg.
-  evalConsumerFlake =
-    {
-      inputs' ? { inherit (inputs) nixpkgs; },
-      module,
-    }:
-    let
-      allInputs = inputs' // {
-        self = {
-          inputs = allInputs;
-          outPath = ../.;
-        };
-      };
-    in
-    inputs.flake-parts.lib.mkFlake { inputs = allInputs; } module;
 
   # Stands in for Runner.Listener so the container command can be RUN, not
   # merely inspected. The rendered script is the only thing deciding whether
@@ -480,7 +467,7 @@ in
 
   image-evaluates =
     let
-      mkRunnerImage = args: import ./image.nix { inherit (inputs.coldstart.lib) mkImage; } args;
+      mkRunnerImage = args: import ./image.nix { inherit mkImage; } args;
       variants = [
         (mkRunnerImage { inherit pkgs; })
         (mkRunnerImage {

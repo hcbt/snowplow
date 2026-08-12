@@ -106,6 +106,9 @@ jobs:
     uses: ./.github/workflows/build-push-image.yml
     with:
       package: runner-image
+      # This repository has no flake any more, so its own reusable workflow is
+      # exercised in the mode consumers now use.
+      builder: devenv
       image: ghcr.io/${{ github.repository_owner }}/snowplow-ci-smoke
       tags: ${{ github.sha }}
     secrets:
