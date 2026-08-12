@@ -27,7 +27,6 @@ let
   # half of this repo is only covered by the two checks that use these.
   snowplow = import ./lib.nix { inherit lib mkImage; };
 
-
   # Stands in for Runner.Listener so the container command can be RUN, not
   # merely inspected. The rendered script is the only thing deciding whether
   # a finished job costs a kubelet restart, and no amount of yq on the
