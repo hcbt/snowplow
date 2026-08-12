@@ -24,12 +24,16 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       # Chart lint, the render assertions, treefmt and the git hooks.
-      # `--no-pure-eval` is not optional: `devShells.default` is a devenv
-      # shell, devenv reads the working directory, and pure evaluation forbids
-      # that. Without the flag the check fails with "devenv was not able to
-      # determine the current directory", which reads like a repository error
-      # rather than a missing flag.
-      - run: nix flake check --no-pure-eval -L
+      - name: Install devenv
+        run: nix profile add nixpkgs#devenv
+
+      # There is no flake any more. Every check was a derivation, so building
+      # it IS running it.
+      - name: Build every output
+        run: devenv build
+
+      - name: Run the hooks
+        run: devenv shell prek -- run --all-files
 
   build-image:
     runs-on: ubuntu-latest
@@ -40,15 +44,23 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
-      # `nix flake check` only evaluates the image; this is what proves it
-      # actually builds. Kept separate from the smoke job below because that
-      # one cannot run for pull requests from forks, where GITHUB_TOKEN has no
-      # write access to packages.
-      - run: nix build .#runner-image -L
+      - name: Install devenv
+        run: nix profile add nixpkgs#devenv
+
+      # `devenv build` above only evaluates most of the image; this is what
+      # proves it actually builds. Kept separate from the smoke job below
+      # because that one cannot run for pull requests from forks, where
+      # GITHUB_TOKEN has no write access to packages.
+      - name: Build the reference image
+        run: |
+          devenv build outputs.reference-runner > build.json
+          path=$(sed -n 's/.*"outputs\.reference-runner": *"\([^"]*\)".*/\1/p' build.json)
+          test -n "$path" || { cat build.json >&2; exit 1; }
+          ln -sfn "$path" result
 
       # Two things that only exist at runtime, asserted in a real container at
       # the real paths. `nix flake check` runs both probes against the store
-      # paths (checks.usr-bin-env-runs-scripts, checks.hashfiles-evaluates), but
+      # paths (outputs.usr-bin-env-runs-scripts and friends), but
       # nothing there can prove `/usr/bin/env` is `/usr/bin/env` once the image
       # is the root filesystem — a nix build has no container to be inside of.
       #
@@ -94,6 +106,9 @@ jobs:
     uses: ./.github/workflows/build-push-image.yml
     with:
       package: runner-image
+      # This repository has no flake any more, so its own reusable workflow is
+      # exercised in the mode consumers now use.
+      builder: devenv
       image: ghcr.io/${{ github.repository_owner }}/snowplow-ci-smoke
       tags: ${{ github.sha }}
     secrets:

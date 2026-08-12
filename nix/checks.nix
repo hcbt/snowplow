@@ -2,8 +2,12 @@
 # against the rendered YAML with yq rather than grep — the templates carry long
 # comments that survive into the output, so a grep for `--ephemeral` matches a
 # comment about ephemeral runners whether or not the flag is there.
-{ inputs }:
-{ pkgs, lib }:
+{ }:
+{
+  pkgs,
+  lib,
+  mkImage,
+}:
 let
   chart = ../chart;
   exampleValues = ../examples/values-example.yaml;
@@ -21,25 +25,7 @@ let
   # `nix flake check` does not look at `flake.lib` or `flake.flakeModules`
   # ("The following flake outputs are unchecked"), so the consumer-facing
   # half of this repo is only covered by the two checks that use these.
-  snowplow = import ./lib.nix { inherit lib inputs; };
-
-  # Evaluates a flake-parts flake the way a consumer would, without needing
-  # this flake's own outputs. `self` has to carry `inputs`: flake-parts
-  # reads `self.inputs` to build the `inputs'` per-system arg.
-  evalConsumerFlake =
-    {
-      inputs' ? { inherit (inputs) nixpkgs; },
-      module,
-    }:
-    let
-      allInputs = inputs' // {
-        self = {
-          inputs = allInputs;
-          outPath = ../.;
-        };
-      };
-    in
-    inputs.flake-parts.lib.mkFlake { inputs = allInputs; } module;
+  snowplow = import ./lib.nix { inherit lib mkImage; };
 
   # Stands in for Runner.Listener so the container command can be RUN, not
   # merely inspected. The rendered script is the only thing deciding whether
@@ -423,101 +409,6 @@ in
         touch $out
       '';
 
-  # `flakeModules.default` is what the README leads with, and nothing else
-  # here evaluates it — `checks.image-evaluates` calls image.nix directly
-  # and bypasses the module entirely. Evaluation IS the test: a broken
-  # option or a mis-wired argument fails this derivation's instantiation.
-  flake-module =
-    let
-      evaluated = evalConsumerFlake {
-        module = {
-          systems = [ "x86_64-linux" ];
-          imports = [ snowplow.flakeModules.default ];
-          perSystem =
-            { pkgs, ... }:
-            {
-              snowplow.images = {
-                plain = { };
-                renamed.name = "custom-name";
-                configured = {
-                  extraPackages = [ pkgs.yq-go ];
-                  withSkopeo = false;
-                  includeNixDB = false;
-                  nixSettings.substituters = [ "https://example.invalid" ];
-                  env.TMPDIR = null;
-                  user = {
-                    uid = 1234;
-                    gid = 1234;
-                    home = "/home/ci";
-                  };
-                  labels."org.opencontainers.image.source" = "https://github.com/OWNER/REPO";
-                };
-              };
-            };
-        };
-      };
-      built = evaluated.packages.x86_64-linux;
-      drv = p: builtins.unsafeDiscardStringContext p.drvPath;
-    in
-    pkgs.runCommand "flake-module" { } ''
-      fail() { echo "FAIL: $*" >&2; exit 1; }
-      eq() { [ "$1" = "$2" ] || fail "$3 (expected '$1', got '$2')"; }
-
-      eq "configured plain renamed" ${lib.escapeShellArg (toString (builtins.attrNames built))} \
-        "one package per declared image"
-
-      # The attribute name becomes the image name, and an explicit `name`
-      # wins over it.
-      eq "plain.tar.gz" ${lib.escapeShellArg built.plain.name} "attr name is the default image name"
-      eq "custom-name.tar.gz" ${lib.escapeShellArg built.renamed.name} "explicit name overrides the attr name"
-
-      # Options must actually reach mkRunnerImage: if the module dropped
-      # them on the floor these two would be the same derivation.
-      [ ${lib.escapeShellArg (drv built.plain)} != ${lib.escapeShellArg (drv built.configured)} ] \
-        || fail "option overrides did not change the derivation"
-
-      touch $out
-    '';
-
-  # examples/flake.nix is documentation, and documentation rots. Evaluate
-  # it against the working tree rather than the published flake: `import`
-  # of the file plus a locally built `snowplow` input means this tests the
-  # code in this commit, offline, with no fetch of github:hcbt/snowplow.
-  example-flake =
-    let
-      example = import ../examples/flake.nix;
-      exampleInputs = {
-        inherit (inputs) nixpkgs;
-        inherit (inputs) flake-parts;
-        inherit snowplow;
-      };
-      evaluated = example.outputs (
-        exampleInputs
-        // {
-          self = {
-            inputs = exampleInputs;
-            outPath = ../examples;
-          };
-        }
-      );
-      built = evaluated.packages.x86_64-linux;
-    in
-    pkgs.runCommand "example-flake" { } ''
-      fail() { echo "FAIL: $*" >&2; exit 1; }
-      eq() { [ "$1" = "$2" ] || fail "$3 (expected '$1', got '$2')"; }
-
-      # Both documented styles, and renderChart, must still evaluate.
-      eq "ci-runner other-runner runner-manifests" \
-        ${lib.escapeShellArg (toString (builtins.attrNames built))} \
-        "every package the example documents"
-
-      eq "ci-runner.tar.gz" ${lib.escapeShellArg built.ci-runner.name} "flakeModules style"
-      eq "other-runner.tar.gz" ${lib.escapeShellArg built.other-runner.name} "raw mkRunnerImage style"
-      eq "snowplow-manifests.yaml" ${lib.escapeShellArg built.runner-manifests.name} "renderChart"
-
-      echo ${lib.escapeShellArg (builtins.unsafeDiscardStringContext built.runner-manifests.drvPath)}
-      touch $out
-    '';
 }
 # Evaluating the image is the test: it proves the derivation and every
 # option path is well-formed, without pulling ~2G of closure into a check.
@@ -575,7 +466,7 @@ in
 
   image-evaluates =
     let
-      mkRunnerImage = args: import ./image.nix { inherit (inputs.coldstart.lib) mkImage; } args;
+      mkRunnerImage = args: import ./image.nix { inherit mkImage; } args;
       variants = [
         (mkRunnerImage { inherit pkgs; })
         (mkRunnerImage {
