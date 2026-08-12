@@ -54,4 +54,14 @@ in
   # Still exported, even though this flake no longer runs flake-parts itself.
   # stakles imports it to declare `snowplow.images.github-runner-image`.
   flakeModules.default = import ./flake-module.nix { inherit mkImage; };
+
+  # The same options, for a project that runs devenv rather than a flake. A
+  # PATH, not an imported module: devenv resolves its own imports, and a
+  # consumer names it as `snowplow/nix/devenv-module.nix` under a
+  # `flake: false` input.
+  #
+  # It exists because devenv `outputs` is typed `outputOf lib.types.attrs`, so
+  # a Nix function fails the check — `lib.mkRunnerImage` cannot reach a devenv
+  # project as a function, but the options can.
+  devenvModules.default = ./devenv-module.nix;
 }
